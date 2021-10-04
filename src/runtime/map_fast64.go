@@ -47,7 +47,7 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 			for i := uintptr(0); i < bucketCnt; i++ {
 				if b.tophash[i] == top {
 					k := add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.keysize)))
-					if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
+					if *(*uint64)(k) == key) { //  && !isEmpty(b.tophash[i]
 						//e := add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.elemsize))+8)
 						e := add(unsafe.Pointer(k), 8)
 						if MapMakeDebug {
