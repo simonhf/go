@@ -24,6 +24,9 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 	key := stringStructOf(&ky)
 	if h.B == 0 {
 		// One-bucket table.
+		if MapCacheFriendly {
+			panic("MapCacheFriendly: should never come here!")
+		}
 		b := (*bmap)(h.buckets)
 		if key.len < 32 {
 			// short key, doing lots of comparisons is ok
@@ -92,13 +95,46 @@ dohash:
 	}
 	top := tophash(hash)
 	for ; b != nil; b = b.overflow(t) {
-		for i, kptr := uintptr(0), b.keys(); i < bucketCnt; i, kptr = i+1, add(kptr, 2*goarch.PtrSize) {
-			k := (*stringStruct)(kptr)
-			if k.len != key.len || b.tophash[i] != top {
-				continue
+		if MapCacheFriendly {
+			for i := uintptr(0); i < bucketCnt; i++ {
+				if b.tophash[i] == top {
+					k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*((2*goarch.PtrSize)+uintptr(t.elemsize))))
+					if k.len == key.len {
+						if k.str == key.str || memequal(k.str, key.str, uintptr(key.len)) {
+							e := add(unsafe.Pointer(k), 2*goarch.PtrSize)
+							if MapMakeDebug {
+								printstring("- mapaccess1_faststr() // key="); printstring(ky)
+								printstring(" b="); printpointer(unsafe.Pointer(b))
+								printstring(" i="); printuintptr(i)
+								printstring(" k="); printpointer(unsafe.Pointer(k))
+								printstring(" e="); printpointer(e)
+								printstring(" hash="); printuintptr(hash)
+								printstring("\n")
+							}
+							return e
+						}
+					}
+				}
 			}
-			if k.str == key.str || memequal(k.str, key.str, uintptr(key.len)) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*2*goarch.PtrSize+i*uintptr(t.elemsize))
+		} else {
+			for i, kptr := uintptr(0), b.keys(); i < bucketCnt; i, kptr = i+1, add(kptr, 2*goarch.PtrSize) {
+				k := (*stringStruct)(kptr)
+				if k.len != key.len || b.tophash[i] != top {
+					continue
+				}
+				if k.str == key.str || memequal(k.str, key.str, uintptr(key.len)) {
+					e := add(unsafe.Pointer(b), dataOffset+bucketCnt*2*goarch.PtrSize+i*uintptr(t.elemsize))
+					if MapMakeDebug {
+						printstring("- mapaccess1_faststr() // key="); printstring(ky)
+						printstring(" b="); printpointer(unsafe.Pointer(b))
+						printstring(" i="); printuintptr(i)
+						printstring(" k="); printpointer(unsafe.Pointer(k))
+						printstring(" e="); printpointer(e)
+						printstring(" hash="); printuintptr(hash)
+						printstring("\n")
+					}
+					return e
+				}
 			}
 		}
 	}
@@ -246,7 +282,12 @@ bucketloop:
 				}
 				continue
 			}
-			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*2*goarch.PtrSize))
+			var k *stringStruct
+			if MapCacheFriendly {
+				k = (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*((2*goarch.PtrSize)+uintptr(t.elemsize))))
+			} else {
+				k = (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*(2*goarch.PtrSize)))
+			}
 			if k.len != key.len {
 				continue
 			}
@@ -284,13 +325,32 @@ bucketloop:
 	}
 	insertb.tophash[inserti&(bucketCnt-1)] = top // mask inserti to avoid bounds checks
 
-	insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*2*goarch.PtrSize)
+	if MapCacheFriendly {
+		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*((2*goarch.PtrSize)+uintptr(t.elemsize)))
+	} else {
+		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*(2*goarch.PtrSize))
+	}
 	// store new key at insert position
 	*((*stringStruct)(insertk)) = *key
 	h.count++
 
 done:
-	elem := add(unsafe.Pointer(insertb), dataOffset+bucketCnt*2*goarch.PtrSize+inserti*uintptr(t.elemsize))
+	var elem unsafe.Pointer
+	if MapCacheFriendly {
+		elem = add(unsafe.Pointer(insertb), dataOffset+inserti*((2*goarch.PtrSize)+uintptr(t.elemsize))+(2*goarch.PtrSize))
+	} else {
+		elem = add(unsafe.Pointer(insertb), dataOffset+bucketCnt*(2*goarch.PtrSize)+inserti*uintptr(t.elemsize))
+	}
+	if MapMakeDebug {
+		printstring("- mapassign_faststr() // s="); printstring(s)
+		printstring(" insertb="); printpointer(unsafe.Pointer(insertb))
+		printstring(" inserti="); printuintptr(inserti)
+		printstring(" insertk="); printpointer(insertk)
+		printstring(" elem="); printpointer(elem)
+		printstring(" hash="); printuintptr(hash)
+		printstring(" .tophash[inserti]="); printhex(uint64(tophash(hash)))
+		printstring("\n")
+	}
 	if h.flags&hashWriting == 0 {
 		throw("concurrent map writes")
 	}

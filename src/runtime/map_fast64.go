@@ -22,11 +22,12 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 		throw("concurrent map read and map write")
 	}
 	var b *bmap
+	hash := t.hasher(noescape(unsafe.Pointer(&key)), uintptr(h.hash0)) // todo: optimize for case: h.B == 0
 	if h.B == 0 {
 		// One-bucket table. No need to hash.
 		b = (*bmap)(h.buckets)
 	} else {
-		hash := t.hasher(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
+		//hash := t.hasher(noescape(unsafe.Pointer(&key)), uintptr(h.hash0))
 		m := bucketMask(h.B)
 		b = (*bmap)(add(h.buckets, (hash&m)*uintptr(t.bucketsize)))
 		if c := h.oldbuckets; c != nil {
@@ -41,9 +42,42 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 		}
 	}
 	for ; b != nil; b = b.overflow(t) {
-		for i, k := uintptr(0), b.keys(); i < bucketCnt; i, k = i+1, add(k, 8) {
-			if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
-				return add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.elemsize))
+		if MapCacheFriendly {
+			top := tophash(hash)
+			for i := uintptr(0); i < bucketCnt; i++ {
+				if b.tophash[i] == top {
+					k := add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.keysize)))
+					if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
+						//e := add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.elemsize))+8)
+						e := add(unsafe.Pointer(k), 8)
+						if MapMakeDebug {
+							printstring("- mapaccess1_fast64() // key="); printuint(key)
+							printstring(" b="); printpointer(unsafe.Pointer(b))
+							printstring(" i="); printuintptr(i)
+							printstring(" k="); printpointer(k)
+							printstring(" e="); printpointer(e)
+							printstring(" hash="); printuintptr(hash)
+							printstring("\n")
+						}
+						return e
+					}
+				}
+			}
+		} else {
+			for i, k := uintptr(0), b.keys(); i < bucketCnt; i, k = i+1, add(k, 8) {
+				if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
+					e := add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.elemsize))
+					if MapMakeDebug {
+						printstring("- mapaccess1_fast64() // key="); printuint(key)
+						printstring(" b="); printpointer(unsafe.Pointer(b))
+						printstring(" i="); printuintptr(i)
+						printstring(" k="); printpointer(k)
+						printstring(" e="); printpointer(e)
+						printstring(" hash="); printuintptr(hash)
+						printstring("\n")
+					}
+					return e
+				}
 			}
 		}
 	}
@@ -134,7 +168,12 @@ bucketloop:
 				}
 				continue
 			}
-			k := *((*uint64)(add(unsafe.Pointer(b), dataOffset+i*8)))
+			var k uint64
+			if MapCacheFriendly {
+				k = *((*uint64)(add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.elemsize)))))
+			} else {
+				k = *((*uint64)(add(unsafe.Pointer(b), dataOffset+i*8)))
+			}
 			if k != key {
 				continue
 			}
@@ -165,14 +204,33 @@ bucketloop:
 	}
 	insertb.tophash[inserti&(bucketCnt-1)] = tophash(hash) // mask inserti to avoid bounds checks
 
-	insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*8)
+	if MapCacheFriendly {
+		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*(8+uintptr(t.elemsize)))
+	} else {
+		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*8)
+	}
 	// store new key at insert position
 	*(*uint64)(insertk) = key
 
 	h.count++
 
 done:
-	elem := add(unsafe.Pointer(insertb), dataOffset+bucketCnt*8+inserti*uintptr(t.elemsize))
+	var elem unsafe.Pointer
+	if MapCacheFriendly {
+		elem = add(unsafe.Pointer(insertb), dataOffset+inserti*(8+uintptr(t.elemsize))+8)
+	} else {
+		elem = add(unsafe.Pointer(insertb), dataOffset+bucketCnt*8+inserti*uintptr(t.elemsize))
+	}
+	if MapMakeDebug {
+		printstring("- mapassign_fast64() // key="); printuint(key)
+		printstring(" insertb="); printpointer(unsafe.Pointer(insertb))
+		printstring(" inserti="); printuintptr(inserti)
+		printstring(" insertk="); printpointer(insertk)
+		printstring(" elem="); printpointer(elem)
+		printstring(" hash="); printuintptr(hash)
+		printstring(" .tophash[inserti]="); printhex(uint64(tophash(hash)))
+		printstring("\n")
+	}
 	if h.flags&hashWriting == 0 {
 		throw("concurrent map writes")
 	}

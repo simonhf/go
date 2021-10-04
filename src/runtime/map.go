@@ -281,6 +281,9 @@ func (h *hmap) createOverflow() {
 }
 
 func makemap64(t *maptype, hint int64, h *hmap) *hmap {
+	if MapMakeDebug {
+		printstring("- makemap64()\n")
+	}
 	if int64(int(hint)) != hint {
 		hint = 0
 	}
@@ -291,10 +294,17 @@ func makemap64(t *maptype, hint int64, h *hmap) *hmap {
 // make(map[k]v, hint) when hint is known to be at most bucketCnt
 // at compile time and the map needs to be allocated on the heap.
 func makemap_small() *hmap {
+	if MapMakeDebug {
+		printstring("- makemap_small()\n")
+	}
 	h := new(hmap)
 	h.hash0 = fastrand()
 	return h
 }
+
+var MapMakeDebug bool = false
+var MapIterDebug bool = false
+var MapCacheFriendly bool = false
 
 // makemap implements Go map creation for make(map[k]v, hint).
 // If the compiler has determined that the map or the first bucket
@@ -302,6 +312,9 @@ func makemap_small() *hmap {
 // If h != nil, the map can be created directly in h.
 // If h.buckets != nil, bucket pointed to can be used as the first bucket.
 func makemap(t *maptype, hint int, h *hmap) *hmap {
+	if MapMakeDebug {
+		printstring("- makemap()\n")
+	}
 	mem, overflow := math.MulUintptr(uintptr(hint), t.bucket.size)
 	if overflow || mem > maxAlloc {
 		hint = 0
@@ -393,6 +406,15 @@ func makeBucketArray(t *maptype, b uint8, dirtyalloc unsafe.Pointer) (buckets un
 // NOTE: The returned pointer may keep the whole map live, so don't
 // hold onto it for very long.
 func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
+	if MapMakeDebug {
+		printstring("- mapaccess1() // key="); printpointer(key)
+		//printstring(" b="); printpointer(unsafe.Pointer(b))
+		//printstring(" i="); printuintptr(i)
+		//printstring(" k="); printpointer(k)
+		//printstring(" e="); printpointer(e)
+		//printstring(" hash="); printuintptr(hash)
+		printstring("\n")
+	}
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
 		pc := abi.FuncPCABIInternal(mapaccess1)
@@ -451,6 +473,15 @@ bucketloop:
 }
 
 func mapaccess2(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, bool) {
+	if MapMakeDebug {
+		printstring("- mapaccess2() // key="); printpointer(key)
+		//printstring(" b="); printpointer(unsafe.Pointer(b))
+		//printstring(" i="); printuintptr(i)
+		//printstring(" k="); printpointer(k)
+		//printstring(" e="); printpointer(e)
+		//printstring(" hash="); printuintptr(hash)
+		printstring("\n")
+	}
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
 		pc := abi.FuncPCABIInternal(mapaccess2)
@@ -510,6 +541,15 @@ bucketloop:
 
 // returns both key and elem. Used by map iterator
 func mapaccessK(t *maptype, h *hmap, key unsafe.Pointer) (unsafe.Pointer, unsafe.Pointer) {
+	if MapMakeDebug {
+		printstring("- mapaccessK() // key="); printpointer(key)
+		//printstring(" b="); printpointer(unsafe.Pointer(b))
+		//printstring(" i="); printuintptr(i)
+		//printstring(" k="); printpointer(k)
+		//printstring(" e="); printpointer(e)
+		//printstring(" hash="); printuintptr(hash)
+		printstring("\n")
+	}
 	if h == nil || h.count == 0 {
 		return nil, nil
 	}
@@ -570,6 +610,9 @@ func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Point
 
 // Like mapaccess, but allocates a slot for the key if it is not present in the map.
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
+	if MapMakeDebug {
+		printstring("- mapassign()\n")
+	}
 	if h == nil {
 		panic(plainError("assignment to entry in nil map"))
 	}
@@ -801,6 +844,9 @@ search:
 // by the compilers order pass or on the heap by reflect_mapiterinit.
 // Both need to have zeroed hiter since the struct contains pointers.
 func mapiterinit(t *maptype, h *hmap, it *hiter) {
+	if MapIterDebug {
+		printstring("- mapiterinit()\n")
+	}
 	if raceenabled && h != nil {
 		callerpc := getcallerpc()
 		racereadpc(unsafe.Pointer(h), callerpc, abi.FuncPCABIInternal(mapiterinit))
@@ -850,6 +896,9 @@ func mapiterinit(t *maptype, h *hmap, it *hiter) {
 }
 
 func mapiternext(it *hiter) {
+	if MapIterDebug {
+		printstring("- mapiternext() //")
+	}
 	h := it.h
 	if raceenabled {
 		callerpc := getcallerpc()
@@ -903,11 +952,30 @@ next:
 			// in the middle of a bucket. It's feasible, just tricky.
 			continue
 		}
-		k := add(unsafe.Pointer(b), dataOffset+uintptr(offi)*uintptr(t.keysize))
+		var k unsafe.Pointer
+		if MapCacheFriendly {
+			k = add(unsafe.Pointer(b), dataOffset+uintptr(offi)*(uintptr(t.keysize)+uintptr(t.elemsize)))
+		} else {
+			k = add(unsafe.Pointer(b), dataOffset+uintptr(offi)*uintptr(t.keysize))
+		}
 		if t.indirectkey() {
+			if MapIterDebug {
+				printstring(" t.indirectkey()"); 
+			}
 			k = *((*unsafe.Pointer)(k))
 		}
-		e := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+uintptr(offi)*uintptr(t.elemsize))
+		var e unsafe.Pointer
+		if MapCacheFriendly {
+			e = add(unsafe.Pointer(b), dataOffset+uintptr(offi)*(uintptr(t.keysize)+uintptr(t.elemsize))+uintptr(t.keysize))
+		} else {
+			e = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+uintptr(offi)*uintptr(t.elemsize))
+		}
+		if MapIterDebug {
+			printstring(" b.tophash[offi]="); printpointer(unsafe.Pointer(&b.tophash[offi]));
+			printstring(" k="); printpointer(k);
+			printstring(" e="); printpointer(e);
+			//printstring("\n")
+		}
 		if checkBucket != noCheck && !h.sameSizeGrow() {
 			// Special case: iterator was started during a grow to a larger size
 			// and the grow is not done yet. We're working on a bucket whose
