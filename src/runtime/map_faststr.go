@@ -24,9 +24,6 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 	key := stringStructOf(&ky)
 	if h.B == 0 {
 		// One-bucket table.
-		if MapCacheFriendly {
-			panic("MapCacheFriendly: should never come here!")
-		}
 		b := (*bmap)(h.buckets)
 		if key.len < 32 {
 			// short key, doing lots of comparisons is ok
@@ -79,6 +76,10 @@ func mapaccess1_faststr(t *maptype, h *hmap, ky string) unsafe.Pointer {
 		}
 		return unsafe.Pointer(&zeroVal[0])
 	}
+
+	if (2*goarch.PtrSize) != uintptr(t.keysize) { // todo: why does original function use "(2*goarch.PtrSize)" and not "uintptr(t.keysize)" like other map functions?
+		panic(plainError("fixme: size mismatch"))
+	}
 dohash:
 	hash := t.hasher(noescape(unsafe.Pointer(&ky)), uintptr(h.hash0))
 	m := bucketMask(h.B)
@@ -94,47 +95,43 @@ dohash:
 		}
 	}
 	top := tophash(hash)
+
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 	for ; b != nil; b = b.overflow(t) {
-		if MapCacheFriendly {
-			for i := uintptr(0); i < bucketCnt; i++ {
-				if b.tophash[i] == top {
-					k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*((2*goarch.PtrSize)+uintptr(t.elemsize))))
-					if k.len == key.len {
-						if k.str == key.str || memequal(k.str, key.str, uintptr(key.len)) {
-							e := add(unsafe.Pointer(k), 2*goarch.PtrSize)
-							if MapMakeDebug {
-								printstring("- mapaccess1_faststr() // key="); printstring(ky)
-								printstring(" b="); printpointer(unsafe.Pointer(b))
-								printstring(" i="); printuintptr(i)
-								printstring(" k="); printpointer(unsafe.Pointer(k))
-								printstring(" e="); printpointer(e)
-								printstring(" hash="); printuintptr(hash)
-								printstring("\n")
-							}
-							return e
-						}
-					}
-				}
+		for i, kptr := uintptr(0), b.keys(); i < bucketCnt; i, kptr = i+1, add(kptr, maybeSize4K) {
+			k := (*stringStruct)(kptr)
+			if k.len != key.len || b.tophash[i] != top {
+				continue
 			}
-		} else {
-			for i, kptr := uintptr(0), b.keys(); i < bucketCnt; i, kptr = i+1, add(kptr, 2*goarch.PtrSize) {
-				k := (*stringStruct)(kptr)
-				if k.len != key.len || b.tophash[i] != top {
-					continue
+			if k.str == key.str || memequal(k.str, key.str, uintptr(key.len)) {
+				e := add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+				if MapMakeDebug {
+					printstring("- mapaccess1_faststr() // key="); printstring(ky)
+					printstring(" b="); printpointer(unsafe.Pointer(b))
+					printstring(" i="); printuintptr(i)
+					printstring(" k="); printpointer(unsafe.Pointer(k))
+					printstring(" e="); printpointer(e)
+					printstring(" hash="); printuintptr(hash)
+					printstring("\n")
 				}
-				if k.str == key.str || memequal(k.str, key.str, uintptr(key.len)) {
-					e := add(unsafe.Pointer(b), dataOffset+bucketCnt*2*goarch.PtrSize+i*uintptr(t.elemsize))
-					if MapMakeDebug {
-						printstring("- mapaccess1_faststr() // key="); printstring(ky)
-						printstring(" b="); printpointer(unsafe.Pointer(b))
-						printstring(" i="); printuintptr(i)
-						printstring(" k="); printpointer(unsafe.Pointer(k))
-						printstring(" e="); printpointer(e)
-						printstring(" hash="); printuintptr(hash)
-						printstring("\n")
-					}
-					return e
-				}
+				return e
 			}
 		}
 	}
@@ -257,6 +254,28 @@ func mapassign_faststr(t *maptype, h *hmap, s string) unsafe.Pointer {
 		h.buckets = newobject(t.bucket) // newarray(t.bucket, 1)
 	}
 
+	if (2*goarch.PtrSize) != uintptr(t.keysize) { // todo: why does original function use "(2*goarch.PtrSize)" and not "uintptr(t.keysize)" like other map functions?
+		panic(plainError("fixme: size mismatch"))
+	}
+
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 again:
 	bucket := hash & bucketMask(h.B)
 	if h.growing() {
@@ -282,12 +301,7 @@ bucketloop:
 				}
 				continue
 			}
-			var k *stringStruct
-			if MapCacheFriendly {
-				k = (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*((2*goarch.PtrSize)+uintptr(t.elemsize))))
-			} else {
-				k = (*stringStruct)(add(unsafe.Pointer(b), dataOffset+i*(2*goarch.PtrSize)))
-			}
+			k := (*stringStruct)(add(unsafe.Pointer(b), dataOffset+(i*maybeSize4K)))
 			if k.len != key.len {
 				continue
 			}
@@ -325,30 +339,23 @@ bucketloop:
 	}
 	insertb.tophash[inserti&(bucketCnt-1)] = top // mask inserti to avoid bounds checks
 
-	if MapCacheFriendly {
-		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*((2*goarch.PtrSize)+uintptr(t.elemsize)))
-	} else {
-		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*(2*goarch.PtrSize))
-	}
+	insertk = add(unsafe.Pointer(insertb), dataOffset+(inserti*maybeSize4K))
 	// store new key at insert position
 	*((*stringStruct)(insertk)) = *key
 	h.count++
 
 done:
-	var elem unsafe.Pointer
-	if MapCacheFriendly {
-		elem = add(unsafe.Pointer(insertb), dataOffset+inserti*((2*goarch.PtrSize)+uintptr(t.elemsize))+(2*goarch.PtrSize))
-	} else {
-		elem = add(unsafe.Pointer(insertb), dataOffset+bucketCnt*(2*goarch.PtrSize)+inserti*uintptr(t.elemsize))
-	}
+	elem := add(unsafe.Pointer(insertb), dataOffset+maybeHead4E+(inserti*maybeSize4E)+maybeTail4E)
 	if MapMakeDebug {
-		printstring("- mapassign_faststr() // s="); printstring(s)
+		printstring("- mapassign_faststr() //")
+		printstring(" s="); printstring(s)
+		printstring(" t.key.size="); printuintptr(t.key.size)
 		printstring(" insertb="); printpointer(unsafe.Pointer(insertb))
 		printstring(" inserti="); printuintptr(inserti)
 		printstring(" insertk="); printpointer(insertk)
 		printstring(" elem="); printpointer(elem)
 		printstring(" hash="); printuintptr(hash)
-		printstring(" .tophash[inserti]="); printhex(uint64(tophash(hash)))
+		printstring(" .tophash(hash)="); printhex(uint64(tophash(hash)))
 		printstring("\n")
 	}
 	if h.flags&hashWriting == 0 {

@@ -41,43 +41,43 @@ func mapaccess1_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 			}
 		}
 	}
+
+	if 8 != uintptr(t.keysize) { // todo: why does original function use "8" and not "uintptr(t.keysize)" like other map functions?
+		panic(plainError("fixme: size mismatch"))
+	}
+
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 	for ; b != nil; b = b.overflow(t) {
-		if MapCacheFriendly {
-			top := tophash(hash)
-			for i := uintptr(0); i < bucketCnt; i++ {
-				if b.tophash[i] == top {
-					k := add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.keysize)))
-					if *(*uint64)(k) == key) { //  && !isEmpty(b.tophash[i]
-						//e := add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.elemsize))+8)
-						e := add(unsafe.Pointer(k), 8)
-						if MapMakeDebug {
-							printstring("- mapaccess1_fast64() // key="); printuint(key)
-							printstring(" b="); printpointer(unsafe.Pointer(b))
-							printstring(" i="); printuintptr(i)
-							printstring(" k="); printpointer(k)
-							printstring(" e="); printpointer(e)
-							printstring(" hash="); printuintptr(hash)
-							printstring("\n")
-						}
-						return e
-					}
+		for i, k := uintptr(0), b.keys(); i < bucketCnt; i, k = i+1, add(k, maybeSize4K) {
+			if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
+				e := add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+				if MapMakeDebug {
+					printstring("- mapaccess1_fast64() // key="); printuint(key)
+					printstring(" b="); printpointer(unsafe.Pointer(b))
+					printstring(" i="); printuintptr(i)
+					printstring(" k="); printpointer(k)
+					printstring(" e="); printpointer(e)
+					printstring(" hash="); printuintptr(hash)
+					printstring("\n")
 				}
-			}
-		} else {
-			for i, k := uintptr(0), b.keys(); i < bucketCnt; i, k = i+1, add(k, 8) {
-				if *(*uint64)(k) == key && !isEmpty(b.tophash[i]) {
-					e := add(unsafe.Pointer(b), dataOffset+bucketCnt*8+i*uintptr(t.elemsize))
-					if MapMakeDebug {
-						printstring("- mapaccess1_fast64() // key="); printuint(key)
-						printstring(" b="); printpointer(unsafe.Pointer(b))
-						printstring(" i="); printuintptr(i)
-						printstring(" k="); printpointer(k)
-						printstring(" e="); printpointer(e)
-						printstring(" hash="); printuintptr(hash)
-						printstring("\n")
-					}
-					return e
-				}
+				return e
 			}
 		}
 	}
@@ -144,6 +144,28 @@ func mapassign_fast64(t *maptype, h *hmap, key uint64) unsafe.Pointer {
 		h.buckets = newobject(t.bucket) // newarray(t.bucket, 1)
 	}
 
+	if 8 != uintptr(t.keysize) { // todo: why does original function use "8" and not "uintptr(t.keysize)" like other map functions?
+		panic(plainError("fixme: size mismatch"))
+	}
+
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 again:
 	bucket := hash & bucketMask(h.B)
 	if h.growing() {
@@ -168,12 +190,7 @@ bucketloop:
 				}
 				continue
 			}
-			var k uint64
-			if MapCacheFriendly {
-				k = *((*uint64)(add(unsafe.Pointer(b), dataOffset+i*(8+uintptr(t.elemsize)))))
-			} else {
-				k = *((*uint64)(add(unsafe.Pointer(b), dataOffset+i*8)))
-			}
+			k := *((*uint64)(add(unsafe.Pointer(b), dataOffset+(i*maybeSize4K))))
 			if k != key {
 				continue
 			}
@@ -204,31 +221,24 @@ bucketloop:
 	}
 	insertb.tophash[inserti&(bucketCnt-1)] = tophash(hash) // mask inserti to avoid bounds checks
 
-	if MapCacheFriendly {
-		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*(8+uintptr(t.elemsize)))
-	} else {
-		insertk = add(unsafe.Pointer(insertb), dataOffset+inserti*8)
-	}
+	insertk = add(unsafe.Pointer(insertb), dataOffset+(inserti*maybeSize4K))
 	// store new key at insert position
 	*(*uint64)(insertk) = key
 
 	h.count++
 
 done:
-	var elem unsafe.Pointer
-	if MapCacheFriendly {
-		elem = add(unsafe.Pointer(insertb), dataOffset+inserti*(8+uintptr(t.elemsize))+8)
-	} else {
-		elem = add(unsafe.Pointer(insertb), dataOffset+bucketCnt*8+inserti*uintptr(t.elemsize))
-	}
+	elem := add(unsafe.Pointer(insertb), dataOffset+maybeHead4E+(inserti*maybeSize4E)+maybeTail4E)
 	if MapMakeDebug {
-		printstring("- mapassign_fast64() // key="); printuint(key)
+		printstring("- mapassign_fast64() //")
+		printstring(" key="); printuint(key)
+		printstring(" t.key.size="); printuintptr(t.key.size)
 		printstring(" insertb="); printpointer(unsafe.Pointer(insertb))
 		printstring(" inserti="); printuintptr(inserti)
 		printstring(" insertk="); printpointer(insertk)
 		printstring(" elem="); printpointer(elem)
 		printstring(" hash="); printuintptr(hash)
-		printstring(" .tophash[inserti]="); printhex(uint64(tophash(hash)))
+		printstring(" .tophash(hash)="); printhex(uint64(tophash(hash)))
 		printstring("\n")
 	}
 	if h.flags&hashWriting == 0 {

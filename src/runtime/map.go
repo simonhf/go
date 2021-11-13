@@ -447,6 +447,25 @@ func mapaccess1(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 		}
 	}
 	top := tophash(hash)
+
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 bucketloop:
 	for ; b != nil; b = b.overflow(t) {
 		for i := uintptr(0); i < bucketCnt; i++ {
@@ -456,12 +475,14 @@ bucketloop:
 				}
 				continue
 			}
-			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+			//fixme k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+			k := add(unsafe.Pointer(b), dataOffset+(i*maybeSize4K))
 			if t.indirectkey() {
 				k = *((*unsafe.Pointer)(k))
 			}
 			if t.key.equal(key, k) {
-				e := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
+				//fixme e := add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
+				e := add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
 				if t.indirectelem() {
 					e = *((*unsafe.Pointer)(e))
 				}
@@ -611,7 +632,7 @@ func mapaccess2_fat(t *maptype, h *hmap, key, zero unsafe.Pointer) (unsafe.Point
 // Like mapaccess, but allocates a slot for the key if it is not present in the map.
 func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 	if MapMakeDebug {
-		printstring("- mapassign()\n")
+		printstring("- mapassign() //")
 	}
 	if h == nil {
 		panic(plainError("assignment to entry in nil map"))
@@ -638,6 +659,24 @@ func mapassign(t *maptype, h *hmap, key unsafe.Pointer) unsafe.Pointer {
 		h.buckets = newobject(t.bucket) // newarray(t.bucket, 1)
 	}
 
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 again:
 	bucket := hash & bucketMask(h.B)
 	if h.growing() {
@@ -655,15 +694,18 @@ bucketloop:
 			if b.tophash[i] != top {
 				if isEmpty(b.tophash[i]) && inserti == nil {
 					inserti = &b.tophash[i]
-					insertk = add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
-					elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
+					//fixme insertk = add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+					insertk = add(unsafe.Pointer(b), dataOffset+(i*maybeSize4K))
+					//fixme elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
+					elem = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
 				}
 				if b.tophash[i] == emptyRest {
 					break bucketloop
 				}
 				continue
 			}
-			k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+			//fixme k := add(unsafe.Pointer(b), dataOffset+i*uintptr(t.keysize))
+			k := add(unsafe.Pointer(b), dataOffset+i*maybeSize4K)
 			if t.indirectkey() {
 				k = *((*unsafe.Pointer)(k))
 			}
@@ -674,7 +716,8 @@ bucketloop:
 			if t.needkeyupdate() {
 				typedmemmove(t.key, k, key)
 			}
-			elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
+			//fixme elem = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+i*uintptr(t.elemsize))
+			elem = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
 			goto done
 		}
 		ovf := b.overflow(t)
@@ -684,6 +727,9 @@ bucketloop:
 		b = ovf
 	}
 
+	if MapMakeDebug {
+		printstring(" (new cell)")
+	}
 	// Did not find mapping for key. Allocate new cell & add entry.
 
 	// If we hit the max load factor or we have too many overflow buckets,
@@ -698,7 +744,8 @@ bucketloop:
 		newb := h.newoverflow(t, b)
 		inserti = &newb.tophash[0]
 		insertk = add(unsafe.Pointer(newb), dataOffset)
-		elem = add(insertk, bucketCnt*uintptr(t.keysize))
+		//fixme elem = add(insertk, bucketCnt*uintptr(t.keysize))
+		elem = add(insertk, maybeHead4E+maybeTail4E)
 	}
 
 	// store new key/elem at insert position
@@ -716,6 +763,19 @@ bucketloop:
 	h.count++
 
 done:
+	if MapMakeDebug {
+		printstring(" t.key.size="); printuintptr(t.key.size)
+		printstring(" t.keysize="); printuintptr(uintptr(t.keysize))
+		printstring(" t.elemsize="); printuintptr(uintptr(t.elemsize))
+		//printstring(" insertb="); printpointer(unsafe.Pointer(insertb))
+		printstring(" inserti="); printpointer(unsafe.Pointer(inserti))
+		printstring(" insertk="); printpointer(insertk)
+		printstring(" elem="); printpointer(elem)
+		printstring(" hash="); printuintptr(hash)
+		printstring(" .tophash(hash)="); printhex(uint64(tophash(hash)))
+		printstring(" h.count="); printhex(uint64(h.count))
+		printstring("\n")
+	}
 	if h.flags&hashWriting == 0 {
 		throw("concurrent map writes")
 	}
@@ -913,9 +973,30 @@ func mapiternext(it *hiter) {
 	i := it.i
 	checkBucket := it.checkBucket
 
+	var maybeHead4E uintptr
+	var maybeTail4E uintptr
+	var maybeSize4K uintptr
+	var maybeSize4E uintptr
+	if (MapCacheFriendly && (t.keysize > 8)) { // come here to interleave KVs in one array
+		maybeHead4E = 0
+		maybeTail4E = uintptr(t.keysize)
+		maybeSize4K = uintptr(t.keysize)+uintptr(t.elemsize)
+		maybeSize4E = uintptr(t.keysize)+uintptr(t.elemsize)
+	} else { // come here to separate KVs in two arrays
+		maybeHead4E = bucketCnt*uintptr(t.keysize)
+		maybeTail4E = 0
+		maybeSize4K = uintptr(t.keysize)
+		maybeSize4E = uintptr(t.elemsize)
+	}
+	// e.g. k = add(unsafe.Pointer(b), dataOffset+            (i*maybeSize4K)            )
+	// e.g. e = add(unsafe.Pointer(b), dataOffset+maybeHead4E+(i*maybeSize4E)+maybeTail4E)
+
 next:
 	if b == nil {
 		if bucket == it.startBucket && it.wrapped {
+			if MapIterDebug {
+				printstring(" end of iteration\n")
+			}
 			// end of iteration
 			it.key = nil
 			it.elem = nil
@@ -952,24 +1033,14 @@ next:
 			// in the middle of a bucket. It's feasible, just tricky.
 			continue
 		}
-		var k unsafe.Pointer
-		if MapCacheFriendly {
-			k = add(unsafe.Pointer(b), dataOffset+uintptr(offi)*(uintptr(t.keysize)+uintptr(t.elemsize)))
-		} else {
-			k = add(unsafe.Pointer(b), dataOffset+uintptr(offi)*uintptr(t.keysize))
-		}
+		k := add(unsafe.Pointer(b), dataOffset+(uintptr(offi)*maybeSize4K))
 		if t.indirectkey() {
 			if MapIterDebug {
 				printstring(" t.indirectkey()"); 
 			}
 			k = *((*unsafe.Pointer)(k))
 		}
-		var e unsafe.Pointer
-		if MapCacheFriendly {
-			e = add(unsafe.Pointer(b), dataOffset+uintptr(offi)*(uintptr(t.keysize)+uintptr(t.elemsize))+uintptr(t.keysize))
-		} else {
-			e = add(unsafe.Pointer(b), dataOffset+bucketCnt*uintptr(t.keysize)+uintptr(offi)*uintptr(t.elemsize))
-		}
+		e := add(unsafe.Pointer(b), dataOffset+maybeHead4E+(uintptr(offi)*maybeSize4E)+maybeTail4E)
 		if MapIterDebug {
 			printstring(" b.tophash[offi]="); printpointer(unsafe.Pointer(&b.tophash[offi]));
 			printstring(" k="); printpointer(k);
